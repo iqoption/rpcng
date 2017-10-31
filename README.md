@@ -1,1 +1,1 @@
-# rpcng
+# Golang RPCNG
