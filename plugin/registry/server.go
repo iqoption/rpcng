@@ -9,15 +9,13 @@ import (
 )
 
 type serverPlugin struct {
-	tags     []string
-	service  string
+	service  registry.Service
 	registry registry.Registry
 }
 
 // Constructor
-func NewServer(registry registry.Registry, service string, tags []string) plugin.Plugin {
+func NewServer(registry registry.Registry, service registry.Service) plugin.Plugin {
 	return &serverPlugin{
-		tags:     tags,
 		service:  service,
 		registry: registry,
 	}
@@ -30,37 +28,33 @@ func (p *serverPlugin) Name() string {
 
 // After start
 func (p *serverPlugin) AfterStart(listener net.Listener, methods []string) error {
-	var s = &registry.Service{
-		Name: p.service,
-	}
-
 	switch listener.Addr().(type) {
 	case *net.TCPAddr:
-		s.Port = listener.Addr().(*net.TCPAddr).Port
-		s.Address = listener.Addr().(*net.TCPAddr).IP.String()
+		p.service.Port = listener.Addr().(*net.TCPAddr).Port
+		p.service.Address = listener.Addr().(*net.TCPAddr).IP.String()
 	case *net.UDPAddr:
-		s.Port = listener.Addr().(*net.UDPAddr).Port
-		s.Address = listener.Addr().(*net.UDPAddr).IP.String()
+		p.service.Port = listener.Addr().(*net.UDPAddr).Port
+		p.service.Address = listener.Addr().(*net.UDPAddr).IP.String()
 	default:
 		return errors.New("listener addr type is not supported")
 	}
 
-	if s.Address == "0.0.0.0" || s.Address == "::" || s.Address == "[::]" {
+	if p.service.Address == "0.0.0.0" || p.service.Address == "::" || p.service.Address == "[::]" {
 		return errors.New("invalid service address")
 	}
 
-	for _, tag := range p.tags {
-		s.Tags = append(s.Tags, tag)
+	for _, tag := range p.service.Tags {
+		p.service.Tags = append(p.service.Tags, tag)
 	}
 
 	for _, method := range methods {
-		s.Tags = append(s.Tags, method)
+		p.service.Tags = append(p.service.Tags, method)
 	}
 
-	return p.registry.Register(s)
+	return p.registry.Register(&p.service)
 }
 
 // Before stop
 func (p *serverPlugin) BeforeStop(listener net.Listener, methods []string) error {
-	return p.registry.Deregister(p.service)
+	return p.registry.Deregister(p.service.Id)
 }

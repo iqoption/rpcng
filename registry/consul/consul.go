@@ -35,6 +35,7 @@ func New(host, port string) (consul registry.Registry, err error) {
 // Register
 func (c *registryConsul) Register(service *registry.Service) error {
 	return c.client.Agent().ServiceRegister(&api.AgentServiceRegistration{
+		ID:      service.Id,
 		Name:    service.Name,
 		Tags:    service.Tags,
 		Port:    service.Port,

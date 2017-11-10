@@ -2,6 +2,7 @@ package registry
 
 type (
 	Service struct {
+		Id      string
 		Name    string
 		Tags    []string
 		Port    int
