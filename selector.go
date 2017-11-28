@@ -160,6 +160,10 @@ func (c *Selector) Random(tag string) (*Selected, error) {
 		return nil, err
 	}
 
+	if tagged.count <= 0 {
+		return nil, fmt.Errorf("can't find client for tag %s", tag)
+	}
+
 	var index = atomic.AddInt64(
 		&tagged.index,
 		rand.Int63n(tagged.count),
