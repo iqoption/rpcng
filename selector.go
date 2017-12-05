@@ -335,6 +335,7 @@ func (c *Selector) pull() (err error) {
 					}
 
 					tagged.items = append(tagged.items, service)
+					continue
 				}
 			}
 		}
