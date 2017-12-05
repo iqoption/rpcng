@@ -43,10 +43,6 @@ func (p *serverPlugin) AfterStart(listener net.Listener, methods []string) error
 		return errors.New("invalid service address")
 	}
 
-	for _, tag := range p.service.Tags {
-		p.service.Tags = append(p.service.Tags, tag)
-	}
-
 	for _, method := range methods {
 		p.service.Tags = append(p.service.Tags, method)
 	}
