@@ -318,6 +318,7 @@ func (c *Selector) pull() (err error) {
 
 			if i == len(tagged.items)-1 {
 				tagged.items = tagged.items[:i]
+				tagged.count--
 				continue
 			}
 
