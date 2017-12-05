@@ -214,7 +214,7 @@ func (c *Selector) fill(tag string) (item *tagged, err error) {
 
 	item = &tagged{
 		index: 0,
-		items: make([]*Selected, 0),
+		items: make([]*Selected, 0, len(c.discovered)),
 	}
 
 	var nwc *Selected
@@ -323,6 +323,7 @@ func (c *Selector) pull() (err error) {
 
 			tagged.items[i] = tagged.items[len(tagged.items)-1]
 			tagged.items = tagged.items[:len(tagged.items)-1]
+			tagged.count--
 		}
 
 		// append
@@ -335,6 +336,7 @@ func (c *Selector) pull() (err error) {
 					}
 
 					tagged.items = append(tagged.items, service)
+					tagged.count++
 					continue
 				}
 			}
