@@ -69,6 +69,7 @@ func (c *registryConsul) Services(service string, tag string) (registry.Services
 
 		// append
 		list = append(list, &registry.Service{
+			Id:      s.Service.ID,
 			Name:    s.Service.Service,
 			Tags:    s.Service.Tags,
 			Port:    s.Service.Port,
