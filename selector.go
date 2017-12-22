@@ -1,6 +1,7 @@
 package rpcng
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -10,7 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pkg/errors"
 	"github.com/iqoption/rpcng/codec/json"
 	"github.com/iqoption/rpcng/registry"
 )
