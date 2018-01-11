@@ -319,11 +319,14 @@ func (s *Server) connectionReader(reader io.Reader, responseChan chan *serverReq
 func (s *Server) handleRequest(responseChan chan<- *serverRequest, request *serverRequest) {
 	s.workerChain <- struct{}{}
 	defer func() {
+		if request.id == 0 {
+			<-s.workerChain
+			return
+		}
+
 		if r := recover(); r != nil {
-			if request.id != 0 {
-				request.err = fmt.Errorf("panic has occurred while handling request: %v", r)
-				responseChan <- request
-			}
+			request.err = fmt.Errorf("panic has occurred while handling request: %v", r)
+			responseChan <- request
 		}
 
 		<-s.workerChain
