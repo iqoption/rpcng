@@ -44,7 +44,7 @@ func newClientRequest(client *Client) *clientRequest {
 		),
 
 		// vars
-		done:  make(chan struct{}),
+		done:  make(chan struct{}, 1),
 		args:  make([]interface{}, 0),
 		reply: make([]interface{}, 0),
 	}
