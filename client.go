@@ -370,6 +370,7 @@ func (c *Client) connectionWriter(
 		}
 
 		id = 0
+
 		// add to pending if needle
 		if !request.skip {
 			// first output
