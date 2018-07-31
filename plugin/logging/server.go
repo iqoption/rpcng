@@ -94,7 +94,7 @@ func (p *serverPlugin) ClientConnected(conn io.ReadWriteCloser) error {
 // Client disconnected
 func (p *serverPlugin) ClientDisconnected(err error) error {
 	if err != nil {
-		p.logger.Debug("Client disconnected", "err", err)
+		p.logger.Error("Client disconnected", "err", err)
 
 		return nil
 	}

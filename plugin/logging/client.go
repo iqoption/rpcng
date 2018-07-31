@@ -76,7 +76,7 @@ func (c *clientPlugin) Disconnected(addr string, err error) error {
 		return nil
 	}
 
-	c.logger.Debug("Disconnected from server", "addr", addr, "err", err)
+	c.logger.Error("Disconnected from server", "addr", addr, "err", err)
 
 	return nil
 }
