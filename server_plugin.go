@@ -43,15 +43,21 @@ type (
 		ClientDisconnected(err error) error
 	}
 
+	// Any errors handler
+	ServerErrorHandler interface {
+		ErrorHandle(err error)
+	}
+
 	// Server plugins registry
 	serverPluginRegistry struct {
-		beforeStart []ServerBeforeStart
-		afterStart  []ServerAfterStart
-		beforeStop  []ServerBeforeStop
-		afterStop   []ServerAfterStop
-		acceptConn  []ServerAcceptConnection
-		clientConn  []ServerClientConnected
-		clientDisc  []ServerClientDisconnected
+		beforeStart   []ServerBeforeStart
+		afterStart    []ServerAfterStart
+		beforeStop    []ServerBeforeStop
+		afterStop     []ServerAfterStop
+		acceptConn    []ServerAcceptConnection
+		clientConn    []ServerClientConnected
+		clientDisc    []ServerClientDisconnected
+		errorHandlers []ServerErrorHandler
 	}
 )
 
@@ -90,6 +96,11 @@ func (r *serverPluginRegistry) Add(p plugin.Plugin) {
 	// client disconnected
 	if v, ok := p.(ServerClientDisconnected); ok {
 		r.clientDisc = append(r.clientDisc, v)
+	}
+
+	// any error or panic handler
+	if v, ok := p.(ServerErrorHandler); ok {
+		r.errorHandlers = append(r.errorHandlers, v)
 	}
 }
 
@@ -168,4 +179,11 @@ func (r *serverPluginRegistry) doClientDisconnected(err error) error {
 	}
 
 	return nil
+}
+
+// Trigger if any error
+func (r *serverPluginRegistry) doError(err error) {
+	for _, p := range r.errorHandlers {
+		p.ErrorHandle(err)
+	}
 }

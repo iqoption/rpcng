@@ -103,3 +103,8 @@ func (p *serverPlugin) ClientDisconnected(err error) error {
 
 	return nil
 }
+
+// ErrorHandle logs an error and stacktrace
+func (p *serverPlugin) ErrorHandle(err error) {
+	p.logger.Error(err.Error())
+}

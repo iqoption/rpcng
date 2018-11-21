@@ -284,6 +284,7 @@ func (s *Server) connectionReader(reader io.Reader, responseChan chan *serverReq
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic has occured while reading: %v", r)
+			s.plugins.doError(err)
 		}
 
 		doneChan <- err
@@ -326,6 +327,7 @@ func (s *Server) handleRequest(responseChan chan<- *serverRequest, request *serv
 
 		if r := recover(); r != nil {
 			request.err = fmt.Errorf("panic has occurred while handling request: %v", r)
+			s.plugins.doError(request.err)
 			responseChan <- request
 		}
 
@@ -352,6 +354,7 @@ func (s *Server) connectionWriter(writer io.Writer, responseChan <-chan *serverR
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic has occured while writing: %v", r)
+			s.plugins.doError(err)
 		}
 
 		doneChan <- err
