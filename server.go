@@ -335,6 +335,9 @@ func (s *Server) handleRequest(responseChan chan<- *serverRequest, request *serv
 	}()
 
 	request.err = s.methods.dispatch(request.input, request.output, s.Codec, request.id > 0)
+	if request.err != nil {
+		s.plugins.doError(request.err)
+	}
 
 	if request.id == 0 {
 		s.requestPool.Put(
