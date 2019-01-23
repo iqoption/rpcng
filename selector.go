@@ -2,9 +2,7 @@ package rpcng
 
 import (
 	"errors"
-	"fmt"
 	"net"
-	"reflect"
 	"sort"
 	"strconv"
 	"sync"
@@ -15,51 +13,41 @@ import (
 	"github.com/iqoption/rpcng/registry"
 )
 
-var (
-	ErrNotFounded = errors.New("can't find any client")
-)
+var ErrNotFounded = errors.New("can't find any client")
 
-type (
-	// Selector
-	Selector struct {
-		// Selected
-		service string
-
-		// Services registry
-		registry registry.Registry
-
-		// tagged (clients pools by tags)
-		tmu    sync.RWMutex
-		tagged map[string]*tagged
-
-		// Mutex
-		mux sync.RWMutex
-
-		// Stop chan
-		stopChan chan struct{}
-		stopped  chan struct{}
-
-		// Discovered tagged
-		discovered registry.Services
-
-		// Stop client
-		stopClient func(client *Client) error
-
-		// Start client
-		startClient func(addr string) (*Client, error)
-
-		// On discovered
-		onDiscovered []func(discovered registry.Services)
-
-		log logger.Logger
-	}
-
+// Selector
+type Selector struct {
 	// Selected
-	Selected struct {
-		Hash   string
-		Client *Client
-	}
-)
+	service string
+
+	// Services registry
+	registry registry.Registry
+
+	// tagged (clients pools by tags)
+	tmu    sync.RWMutex
+	tagged map[string]*tagged
+
+	// Mutex
+	mux sync.RWMutex
+
+	// Stop chan
+	stopChan chan struct{}
+	stopped  chan struct{}
+
+	// Discovered tagged
+	discovered registry.Services
+
+	// Stop client
+	stopClient func(client *Client) error
+
+	// Start client
+	startClient func(addr string) (*Client, error)
+
+	// On discovered
+	onDiscovered []func(discovered registry.Services)
+
+	log logger.Logger
+}
 
 // Constructor
 func NewSelector(registry registry.Registry, service string, interval int64, log logger.Logger) (selector *Selector, err error) {
@@ -384,43 +372,4 @@ func (c *Selector) stop(cl *Client) error {
 	}
 	// TODO await completition + timeout
 	return c.stopClient(cl)
-}
-
-// Create service
-func (c *Selector) createSelected(discovered *registry.Service) (*Selected, error) {
-	var (
-		err      error
-		addr     = net.JoinHostPort(discovered.Address, strconv.FormatInt(int64(discovered.Port), 10))
-		selected = &Selected{}
-	)
-
-	selected.Hash = c.hashService(discovered)
-	if selected.Client, err = c.startClient(addr); err != nil {
-		return nil, err
-	}
-
-	return selected, nil
-}
-
-// Destroy service
-func (c *Selector) destroySelected(selected *Selected) (err error) {
-	if err = c.stopClient(selected.Client); err != nil {
-		return err
-	}
-
-	selected.Hash = ""
-	selected.Client = nil
-	selected = nil
-
-	return nil
-}
-
-// Selected Hash
-func (c *Selector) hashService(s *registry.Service) string {
-	return fmt.Sprintf("%s:%d", s.Address, s.Port)
-}
-
-// Is equal discovered
-func (c *Selector) isEqualServices(a, b *registry.Service) bool {
-	return reflect.DeepEqual(a, b)
 }
