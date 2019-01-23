@@ -2,7 +2,6 @@ package rpcng
 
 import (
 	"math/rand"
-	"strconv"
 	"sync/atomic"
 
 	"github.com/iqoption/rpcng/consistenthash"
@@ -28,7 +27,7 @@ func newTagged(tag string, services registry.Services, clients []*Client, chash 
 
 	if chash {
 		t.idc = make(map[string]*Client)
-		t.hash = consistenthash.New(200, nil)
+		t.hash = consistenthash.New(200)
 		s := make([]string, len(services))
 		for i := range services {
 			s[i] = services[i].Id
@@ -52,9 +51,7 @@ func (t *tagged) Hashed(key int) (*Client, error) {
 	if t.hash == nil || t.hash.IsEmpty() {
 		return nil, ErrNotFounded
 	}
-	// return t.idc[t.hash.GetInt(key)], nil
-	// TODO rewrite hash func and eliminate allocation
-	return t.idc[t.hash.Get(strconv.Itoa(key))], nil
+	return t.idc[t.hash.GetUint64(uint64(key))], nil
 }
 
 func (t *tagged) RoundRobin() (*Client, error) {
