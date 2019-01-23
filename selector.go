@@ -3,15 +3,15 @@ package rpcng
 import (
 	"errors"
 	"fmt"
-	"math/rand"
 	"net"
 	"reflect"
+	"sort"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/iqoption/rpcng/codec/json"
+	"github.com/iqoption/rpcng/logger"
 	"github.com/iqoption/rpcng/registry"
 )
 
@@ -22,20 +22,22 @@ var (
 type (
 	// Selector
 	Selector struct {
-		// Mutex
-		mux sync.RWMutex
-
-		// tagged
-		tagged map[string]*tagged
-
 		// Selected
 		service string
 
 		// Services registry
 		registry registry.Registry
 
+		// tagged (clients pools by tags)
+		tmu    sync.RWMutex
+		tagged map[string]*tagged
+
+		// Mutex
+		mux sync.RWMutex
+
 		// Stop chan
 		stopChan chan struct{}
+		stopped  chan struct{}
 
 		// Discovered tagged
 		discovered registry.Services
@@ -48,6 +50,8 @@ type (
 
 		// On discovered
 		onDiscovered []func(discovered registry.Services)
+
+		log logger.Logger
 	}
 
 	// Selected
@@ -55,22 +59,17 @@ type (
 		Hash   string
 		Client *Client
 	}
-
-	// Tagged entry
-	tagged struct {
-		index int64
-		count int64
-		items []*Selected
-	}
 )
 
 // Constructor
-func NewSelector(registry registry.Registry, service string, interval int64) (selector *Selector, err error) {
+func NewSelector(registry registry.Registry, service string, interval int64, log logger.Logger) (selector *Selector, err error) {
 	selector = &Selector{
-		tagged:   make(map[string]*tagged),
 		service:  service,
 		registry: registry,
 		stopChan: make(chan struct{}),
+		stopped:  make(chan struct{}),
+		tagged:   make(map[string]*tagged),
+		log:      log,
 
 		// defaults
 		startClient: func(addr string) (client *Client, err error) {
@@ -92,10 +91,12 @@ func NewSelector(registry registry.Registry, service string, interval int64) (se
 
 	var ticker = time.NewTicker(time.Duration(interval) * time.Second)
 	go func(c *Selector) {
+		defer func() { c.stopped <- struct{}{} }()
 		for {
 			select {
 			case <-ticker.C:
-				c.pull() // TODO don't ignore errors
+				err := c.pull() // TODO don't ignore errors
+				c.log.Error("Error lookup services", "error", err)
 			case <-c.stopChan:
 				ticker.Stop()
 				return
@@ -133,223 +134,256 @@ func (c *Selector) OnDiscovered(fn func(discovered registry.Services)) {
 
 // Stop
 func (c *Selector) Stop() (err error) {
-	c.mux.Lock()
-	defer c.mux.Unlock()
-
 	// close
 	close(c.stopChan)
+	<-c.stopped
 
-	// free all items
-	for tag := range c.tagged {
-		for _, wc := range c.tagged[tag].items {
-			if err = c.destroySelected(wc); err != nil {
-				return err
-			}
+	c.tmu.Lock()
+	defer c.tmu.Unlock()
+	// close all clients
+	for _, p := range c.tagged {
+		for _, cl := range p.All() {
+			c.stop(cl)
 		}
-
-		delete(c.tagged, tag)
 	}
+
+	// discard map
+	c.tagged = make(map[string]*tagged)
 
 	return nil
 }
 
 // Random Client
-func (c *Selector) Random(tag string) (*Selected, error) {
-	var tagged, err = c.fill(tag)
+func (c *Selector) Random(tag string) (*Client, error) {
+	var p, err = c.fill(tag, false)
 	if err != nil {
 		return nil, err
 	}
 
-	if tagged.count <= 0 {
-		return nil, fmt.Errorf("can't find client for tag %s", tag)
+	return p.Random()
+}
+
+// Random Client
+func (c *Selector) Hashed(tag string, key int) (*Client, error) {
+	var p, err = c.fill(tag, true)
+	if err != nil {
+		return nil, err
 	}
 
-	var index = atomic.AddInt64(
-		&tagged.index,
-		rand.Int63n(tagged.count),
-	)
-
-	return tagged.items[index%tagged.count], nil
+	return p.Hashed(key)
 }
 
 // Round robin Client
-func (c *Selector) RoundRobin(tag string) (*Selected, error) {
-	var tagged, err = c.fill(tag)
+func (c *Selector) RoundRobin(tag string) (*Client, error) {
+	var p, err = c.fill(tag, false)
 	if err != nil {
 		return nil, err
 	}
-
-	var index = atomic.AddInt64(&tagged.index, 1)
-
-	return tagged.items[index%tagged.count], nil
+	return p.RoundRobin()
 }
 
 // All items
-func (c *Selector) All(tag string) ([]*Selected, error) {
-	var tagged, err = c.fill(tag)
+func (c *Selector) All(tag string) ([]*Client, error) {
+	var p, err = c.fill(tag, false)
 	if err != nil {
 		return nil, err
 	}
 
-	return tagged.items, nil
+	return p.All(), nil
 }
 
-// Fill items
-func (c *Selector) fill(tag string) (item *tagged, err error) {
-	var founded bool
+// Fill items, chash (consistent hashing flag)
+func (c *Selector) fill(tag string, chash bool) (*tagged, error) {
+	// fast path
+	c.tmu.RLock()
+	if p, ok := c.tagged[tag]; ok && (!chash || p.HasCHash()) {
+		c.tmu.RUnlock()
+		return p, nil
+	}
+	c.tmu.RUnlock()
 
-	c.mux.RLock()
-	if item, founded = c.tagged[tag]; founded {
-		c.mux.RUnlock()
+	// slow path
+	c.mux.Lock() // only one tag can be created at one moment
+	defer c.mux.Unlock()
 
-		if len(item.items) == 0 {
-			return nil, ErrNotFounded
+	// double check
+	c.tmu.RLock()
+	if p, ok := c.tagged[tag]; ok && (!chash || p.HasCHash()) {
+		c.tmu.RUnlock()
+		return p, nil
+	}
+	c.tmu.RUnlock()
+
+	s := c.getServices(tag, c.getDiscovered(), nil)
+
+	clients := make([]*Client, len(s))
+	for i := range clients {
+		var err error
+		clients[i], err = c.connect(s[i])
+		if err != nil {
+			for i := range clients {
+				c.stop(clients[i])
+			}
+			return nil, err
 		}
-
-		return item, nil
 	}
 
+	p := newTagged(tag, s, clients, chash)
+
+	c.tmu.Lock()
+	c.tagged[tag] = p
+	c.tmu.Unlock()
+
+	return p, nil
+}
+
+func (c *Selector) getDiscovered() registry.Services {
+	c.mux.RLock()
+	d := c.discovered
 	c.mux.RUnlock()
-	c.mux.Lock()
+	return d
+}
 
-	item = &tagged{
-		index: 0,
-		items: make([]*Selected, 0, len(c.discovered)),
-	}
-
-	var nwc *Selected
-	for _, s := range c.discovered {
+func (c *Selector) getServices(tag string, discovered, buf registry.Services) registry.Services {
+	buf = buf[:0]
+	for _, s := range discovered {
 		for _, v := range s.Tags {
 			if v == tag {
-				if nwc, err = c.createSelected(s); err != nil {
-					c.mux.Unlock()
-
-					return nil, err
-				}
-
-				item.items = append(item.items, nwc)
+				buf = append(buf, s)
 			}
 		}
 	}
-
-	c.tagged[tag] = item
-	c.tagged[tag].count = int64(len(item.items))
-
-	c.mux.Unlock()
-
-	if len(item.items) == 0 {
-		return nil, ErrNotFounded
-	}
-
-	return item, nil
+	return buf
 }
 
 // Pull items
 func (c *Selector) pull() (err error) {
-	c.mux.Lock()
-	defer c.mux.Unlock()
 
 	var discovered registry.Services
 	if discovered, err = c.registry.Services(c.service, ""); err != nil {
 		return err
 	}
+	sort.Slice(discovered, func(i, j int) bool {
+		return discovered[i].Id < discovered[j].Id
 
-	var (
-		index           int
-		newDiscovered   registry.Services
-		deletedServices = make(map[string]bool)
-	)
+	})
 
-	// updated, added
-	for i := 0; i < len(discovered); i++ {
-		index = -1
-
-		// find
-		for j := 0; j < len(c.discovered); j++ {
-			if c.isEqualServices(discovered[i], c.discovered[j]) {
-				index = j
-				break
-			}
-		}
-
-		// equal
-		if index > -1 {
-			continue
-		}
-
-		// append
-		newDiscovered = append(newDiscovered, discovered[i])
+	if c.sameServices(c.getDiscovered(), discovered) {
+		return nil
 	}
 
-	// founded
-	for i := 0; i < len(c.discovered); i++ {
-		index = -1
-
-		// find
-		for j := 0; j < len(discovered); j++ {
-			if c.isEqualServices(c.discovered[i], discovered[j]) {
-				index = j
-				break
-			}
-		}
-
-		if -1 == index {
-			deletedServices[c.hashService(c.discovered[i])] = true
-		}
-	}
-
+	c.mux.Lock()
 	// replace
 	c.discovered = discovered
-
-	// update
-	var founded bool
-	for tag, tagged := range c.tagged {
-		// reset
-		tagged.index = 0
-
-		// delete
-		for i := 0; i < len(tagged.items); {
-			if _, founded = deletedServices[tagged.items[i].Hash]; !founded {
-				i++
-				continue
-			}
-
-			c.destroySelected(tagged.items[i])
-
-			if i == len(tagged.items)-1 {
-				tagged.items = tagged.items[:i]
-				tagged.count--
-				continue
-			}
-
-			tagged.items[i] = tagged.items[len(tagged.items)-1]
-			tagged.items = tagged.items[:len(tagged.items)-1]
-			tagged.count--
-		}
-
-		// append
-		var service *Selected
-		for _, s := range newDiscovered {
-			for _, v := range s.Tags {
-				if v == tag {
-					if service, err = c.createSelected(s); err != nil {
-						return err
-					}
-
-					tagged.items = append(tagged.items, service)
-					tagged.count++
-					continue
-				}
-			}
-		}
-	}
-
-	// trigger
+	// trigger // do we ever need it ? remove ?
 	for _, fn := range c.onDiscovered {
 		fn(c.discovered)
 	}
 
+	c.mux.Unlock()
+
+	var tbuf = make([]*tagged, 0, 1024)
+	c.tmu.RLock()
+	for _, t := range c.tagged {
+		tbuf = append(tbuf, t)
+	}
+	c.tmu.RUnlock()
+
+	var closing = make([]*Client, 0, 1024)
+	var buf = make([]*registry.Service, 128)
+loop:
+	for _, p := range tbuf {
+		s := c.getServices(p.Tag(), discovered, buf)
+		if c.sameServices(p.Services(), s) {
+			continue
+		}
+		// copy from buf
+		ns := make(registry.Services, len(s))
+		copy(ns, s)
+
+		// for cleanup in case of errors
+		created := make([]*Client, len(s))
+
+		ncl := make([]*Client, len(s))
+
+		// copy existed clients, create new
+		os := p.services
+		for i := range ns {
+			for j := range os {
+				if os[j].Id == ns[i].Id {
+					ncl[i] = p.All()[j]
+					break
+				}
+			}
+			if ncl[i] == nil {
+				var err error
+				ncl[i], err = c.connect(ns[i])
+				if err != nil {
+					c.log.Error("failed open conection", "error", err, "service", ns[i].Id)
+					for i := range created {
+						c.stop(created[i])
+					}
+					continue loop
+				}
+				created = append(created, ncl[i])
+			}
+		}
+
+		np := newTagged(p.Tag(), ns, ncl, p.HasCHash())
+
+		c.tmu.Lock()
+		c.tagged[np.Tag()] = np
+		c.tmu.Unlock()
+
+		// close not needed
+		for i := range os {
+			found := false
+			for j := range ns {
+				if os[i].Id == ns[j].Id {
+					found = true
+					break
+				}
+			}
+			if !found {
+				closing = append(closing, p.All()[i])
+			}
+		}
+	}
+
+	for i := range closing {
+		c.stop(closing[i])
+	}
+
 	return nil
+}
+
+func (c *Selector) sameServices(a, b registry.Services) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	// both slice already sorted by Id
+	for i := range a {
+		if a[i].Id != b[i].Id {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (c *Selector) connect(s *registry.Service) (*Client, error) {
+	var addr = net.JoinHostPort(s.Address, strconv.FormatInt(int64(s.Port), 10))
+
+	return c.startClient(addr)
+}
+
+func (c *Selector) stop(cl *Client) error {
+	if cl == nil {
+		return nil
+	}
+	// TODO await completition + timeout
+	return c.stopClient(cl)
 }
 
 // Create service

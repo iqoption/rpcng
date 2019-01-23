@@ -144,7 +144,7 @@ func (c *Client) Start() error {
 // Stop Client. Stopped Client can be started again
 func (c *Client) Stop() error {
 	if c.stopChan == nil {
-		return errors.New("server must be started before stopping it")
+		return errors.New("client must be started before stopping it")
 	}
 
 	// trigger
