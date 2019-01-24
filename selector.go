@@ -79,7 +79,7 @@ func NewSelector(registry registry.Registry, service string, interval int64, log
 
 	var ticker = time.NewTicker(time.Duration(interval) * time.Second)
 	go func(c *Selector) {
-		defer func() { c.stopped <- struct{}{} }()
+		defer close(c.stopped)
 		for {
 			select {
 			case <-ticker.C:
@@ -196,33 +196,18 @@ func (c *Selector) fill(tag string, chash bool) (*tagged, error) {
 
 	// double check
 	c.tmu.RLock()
-	if p, ok := c.tagged[tag]; ok && (!chash || p.HasCHash()) {
+	p, ok := c.tagged[tag]
+	if ok && (!chash || p.HasCHash()) {
 		c.tmu.RUnlock()
 		return p, nil
 	}
 	c.tmu.RUnlock()
 
-	s := c.getServices(tag, c.getDiscovered(), nil)
-
-	clients := make([]*Client, len(s))
-	for i := range clients {
-		var err error
-		clients[i], err = c.connect(s[i])
-		if err != nil {
-			for i := range clients {
-				c.stop(clients[i])
-			}
-			return nil, err
-		}
+	s := c.getServices(tag, c.discovered, nil)
+	if !chash && p != nil {
+		chash = p.HasCHash()
 	}
-
-	p := newTagged(tag, s, clients, chash)
-
-	c.tmu.Lock()
-	c.tagged[tag] = p
-	c.tmu.Unlock()
-
-	return p, nil
+	return c.replaceTagged(tag, p, s, chash)
 }
 
 func (c *Selector) getDiscovered() registry.Services {
@@ -277,72 +262,99 @@ func (c *Selector) pull() (err error) {
 	}
 	c.tmu.RUnlock()
 
-	var closing = make([]*Client, 0, 1024)
 	var buf = make([]*registry.Service, 128)
-loop:
 	for _, p := range tbuf {
 		s := c.getServices(p.Tag(), discovered, buf)
 		if c.sameServices(p.Services(), s) {
 			continue
 		}
+
 		// copy from buf
 		ns := make(registry.Services, len(s))
 		copy(ns, s)
 
-		// for cleanup in case of errors
-		created := make([]*Client, len(s))
-
-		ncl := make([]*Client, len(s))
-
-		// copy existed clients, create new
-		os := p.services
-		for i := range ns {
-			for j := range os {
-				if os[j].Id == ns[i].Id {
-					ncl[i] = p.All()[j]
-					break
-				}
-			}
-			if ncl[i] == nil {
-				var err error
-				ncl[i], err = c.connect(ns[i])
-				if err != nil {
-					c.log.Error("failed open conection", "error", err, "service", ns[i].Id)
-					for i := range created {
-						c.stop(created[i])
-					}
-					continue loop
-				}
-				created = append(created, ncl[i])
-			}
+		if _, err := c.replaceTagged(p.Tag(), p, ns, p.HasCHash()); err != nil {
+			c.log.Error("failure to replase tagged", "error", err)
 		}
-
-		np := newTagged(p.Tag(), ns, ncl, p.HasCHash())
-
-		c.tmu.Lock()
-		c.tagged[np.Tag()] = np
-		c.tmu.Unlock()
-
-		// close not needed
-		for i := range os {
-			found := false
-			for j := range ns {
-				if os[i].Id == ns[j].Id {
-					found = true
-					break
-				}
-			}
-			if !found {
-				closing = append(closing, p.All()[i])
-			}
-		}
-	}
-
-	for i := range closing {
-		c.stop(closing[i])
 	}
 
 	return nil
+}
+
+// replaceTagged replaces old instance (can be null) with new one based on old clients, finalize unneeded clients
+// and returns new one
+func (c *Selector) replaceTagged(tag string, old *tagged, s registry.Services, chash bool) (*tagged, error) {
+	p, err := c.newTagged(tag, old, s, chash)
+	if err != nil {
+		return nil, err
+	}
+
+	c.tmu.Lock()
+	c.tagged[tag] = p
+	c.tmu.Unlock()
+
+	if old == nil {
+		return p, nil
+	}
+
+	// close not needed clients
+	var os = old.Services()
+	for i := range os {
+		found := false
+		for j := range s {
+			if os[i].Id == s[j].Id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			c.stop(old.All()[i])
+		}
+	}
+	return p, nil
+}
+
+// newTagged creates tagged instance with reusing clients from old instance (can be null)
+func (c *Selector) newTagged(tag string, old *tagged, s registry.Services, chash bool) (*tagged, error) {
+	// for cleanup in case of errors
+	created := make([]*Client, len(s))
+
+	ncl := make([]*Client, len(s))
+
+	var os registry.Services
+	if old != nil {
+		os = old.Services()
+	}
+
+	var err error
+	for i := range s {
+		// copy existed clients
+		for j := range os {
+			if os[j].Id == s[i].Id {
+				ncl[i] = old.All()[j]
+				break
+			}
+		}
+		// create new
+		if ncl[i] == nil {
+			ncl[i], err = c.connect(s[i])
+			if err != nil {
+				err = errors.New("failed to open client to " + s[i].Id + ":" + err.Error())
+				break
+			}
+			created = append(created, ncl[i])
+		}
+	}
+
+	if err != nil {
+		// clean up
+		for i := range created {
+			c.stop(created[i])
+		}
+		return nil, err
+	}
+
+	return newTagged(tag, s, ncl, chash), nil
 }
 
 func (c *Selector) sameServices(a, b registry.Services) bool {
