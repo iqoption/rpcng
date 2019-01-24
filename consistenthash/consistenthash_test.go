@@ -12,14 +12,12 @@ func BenchmarkGet512(b *testing.B) { benchmarkGet(b, 512) }
 
 func benchmarkGet(b *testing.B, shards int) {
 
-	hash := New(50)
-
 	var buckets []string
 	for i := 0; i < shards; i++ {
 		buckets = append(buckets, fmt.Sprintf("shard-%d", i))
 	}
 
-	hash.Add(buckets...)
+	hash := New(50, buckets...)
 
 	b.ResetTimer()
 

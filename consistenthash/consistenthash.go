@@ -13,11 +13,12 @@ type Map struct {
 	hashMap  map[uint64]string
 }
 
-func New(replicas int) *Map {
+func New(replicas int, keys ...string) *Map {
 	m := &Map{
 		replicas: replicas,
 		hashMap:  make(map[uint64]string),
 	}
+	m.add(keys...)
 	return m
 }
 
@@ -27,7 +28,7 @@ func (m *Map) IsEmpty() bool {
 }
 
 // Adds some keys to the hash.
-func (m *Map) Add(keys ...string) {
+func (m *Map) add(keys ...string) {
 	for _, key := range keys {
 		for i := 0; i < m.replicas; i++ {
 			hash := fnv1a.HashString64(strconv.Itoa(i) + key)

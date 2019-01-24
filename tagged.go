@@ -27,13 +27,12 @@ func newTagged(tag string, services registry.Services, clients []*Client, chash 
 
 	if chash {
 		t.idc = make(map[string]*Client)
-		t.hash = consistenthash.New(200)
 		s := make([]string, len(services))
 		for i := range services {
 			s[i] = services[i].Id
 			t.idc[s[i]] = clients[i]
 		}
-		t.hash.Add(s...)
+		t.hash = consistenthash.New(200, s...)
 	}
 	return t
 }
