@@ -45,16 +45,7 @@ func (m *Map) Get(key string) string {
 		return ""
 	}
 
-	hash := fnv1a.HashString64(key)
-
-	// Binary search for appropriate replica.
-	idx := sort.Search(len(m.keys), func(i int) bool { return m.keys[i] >= hash })
-	// Means we have cycled back to the first replica.
-	if idx == len(m.keys) {
-		idx = 0
-	}
-
-	return m.hashMap[m.keys[idx]]
+	return m.search(fnv1a.HashString64(key))
 }
 
 func (m *Map) GetUint64(key uint64) string {
@@ -62,8 +53,10 @@ func (m *Map) GetUint64(key uint64) string {
 		return ""
 	}
 
-	hash := fnv1a.HashUint64(key)
+	return m.search(fnv1a.HashUint64(key))
+}
 
+func (m *Map) search(hash uint64) string {
 	// Binary search for appropriate replica.
 	idx := sort.Search(len(m.keys), func(i int) bool { return m.keys[i] >= hash })
 

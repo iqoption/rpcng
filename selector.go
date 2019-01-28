@@ -274,7 +274,7 @@ func (c *Selector) pull() (err error) {
 		copy(ns, s)
 
 		if _, err := c.replaceTagged(p.Tag(), p, ns, p.HasCHash()); err != nil {
-			c.log.Error("failure to replase tagged", "error", err)
+			c.log.Error("failure to replace tagged", "error", err)
 		}
 	}
 
