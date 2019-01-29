@@ -83,8 +83,10 @@ func NewSelector(registry registry.Registry, service string, interval int64, log
 		for {
 			select {
 			case <-ticker.C:
-				err := c.pull() // TODO don't ignore errors
-				c.log.Error("Error lookup services", "error", err)
+				err := c.pull()
+				if err != nil {
+					c.log.Error("Error lookup services", "error", err)
+				}
 			case <-c.stopChan:
 				ticker.Stop()
 				return
