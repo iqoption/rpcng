@@ -42,8 +42,15 @@ func (t *tagged) Tag() string {
 }
 
 func (t *tagged) Random() (*Client, error) {
-	var index = int64(rand.Intn(len(t.clients)))
-	return t.client(index)
+	n := len(t.clients)
+	switch {
+	case n <= 0:
+		return nil, ErrNotFounded
+	case n == 1:
+		return t.client(0)
+	default:
+		return t.client(int64(rand.Intn(n)))
+	}
 }
 
 func (t *tagged) Hashed(key int) (*Client, error) {
